@@ -112,7 +112,7 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
         if (this.isTransactionActive)
             throw new TransactionAlreadyStartedError();
 
-        await this.broadcaster.broadcast('BeforeTransactionStart');
+        await this.broadcaster.broadcast("BeforeTransactionStart");
 
         this.isTransactionActive = true;
         if (isolationLevel) {
@@ -122,7 +122,7 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
             await this.query("START TRANSACTION");
         }
 
-        await this.broadcaster.broadcast('AfterTransactionStart');
+        await this.broadcaster.broadcast("AfterTransactionStart");
     }
 
     /**
@@ -133,12 +133,12 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
         if (!this.isTransactionActive)
             throw new TransactionNotStartedError();
 
-        await this.broadcaster.broadcast('BeforeTransactionCommit');
+        await this.broadcaster.broadcast("BeforeTransactionCommit");
 
         await this.query("COMMIT");
         this.isTransactionActive = false;
 
-        await this.broadcaster.broadcast('AfterTransactionCommit');
+        await this.broadcaster.broadcast("AfterTransactionCommit");
     }
 
     /**
@@ -149,12 +149,12 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
         if (!this.isTransactionActive)
             throw new TransactionNotStartedError();
 
-        await this.broadcaster.broadcast('BeforeTransactionRollback');
+        await this.broadcaster.broadcast("BeforeTransactionRollback");
 
         await this.query("ROLLBACK");
         this.isTransactionActive = false;
 
-        await this.broadcaster.broadcast('AfterTransactionRollback');
+        await this.broadcaster.broadcast("AfterTransactionRollback");
     }
 
     /**
@@ -193,7 +193,7 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
                         // Do nothing.
                     }
 
-                    if (raw?.hasOwnProperty('affectedRows')) {
+                    if (raw?.hasOwnProperty("affectedRows")) {
                         result.affected = raw.affectedRows;
                     }
 
@@ -1218,7 +1218,7 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
 
         const currentDatabase = await this.getCurrentDatabase();
         const viewsCondition = viewNames.map(tableName => {
-            let { database, tableName: name } = this.driver.parseTableName(tableName)
+            let { database, tableName: name } = this.driver.parseTableName(tableName);
 
             if (!database) {
                 database = currentDatabase;
@@ -1284,7 +1284,7 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
             // Avoid data directory scan: TABLE_SCHEMA
             // Avoid database directory scan: TABLE_NAME
             // We only use `TABLE_SCHEMA` and `TABLE_NAME` which is `SKIP_OPEN_TABLE`
-            const tablesSql = tableNames
+            const tablesSql = "SELECT `TABLE_SCHEMA`, `TABLE_NAME` FROM `INFORMATION_SCHEMA`.`TABLES` WHERE " + tableNames
                 .filter(tableName => tableName)
                 .map(tableName => {
                     let { database, tableName: name } = this.driver.parseTableName(tableName);
@@ -1293,14 +1293,9 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
                         database = currentDatabase;
                     }
 
-                    return `
-                        SELECT \`TABLE_SCHEMA\`,
-                               \`TABLE_NAME\`
-                        FROM \`INFORMATION_SCHEMA\`.\`TABLES\`
-                        WHERE \`TABLE_SCHEMA\` = '${database}'
-                          AND \`TABLE_NAME\` = '${name}'
-                    `;
-                }).join(" UNION ");
+                    return `(\`TABLE_SCHEMA\` = '${database}' AND \`TABLE_NAME\` = '${name}')`;
+                })
+                .join(" OR ");
 
             dbTables.push(...await this.query(tablesSql));
         }
@@ -1314,63 +1309,39 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
         // Avoid data directory scan: TABLE_SCHEMA
         // Avoid database directory scan: TABLE_NAME
         // Full columns: CARDINALITY & INDEX_TYPE - everything else is FRM only
-        const statsSubquerySql = dbTables.map(({ TABLE_SCHEMA, TABLE_NAME }) => {
-            return `
-                SELECT
-                    *
-                FROM \`INFORMATION_SCHEMA\`.\`STATISTICS\`
-                WHERE
-                    \`TABLE_SCHEMA\` = '${TABLE_SCHEMA}'
-                    AND
-                    \`TABLE_NAME\` = '${TABLE_NAME}'
-            `;
-        }).join(" UNION ");
+        const statsSubquerySql = "SELECT * FROM \`INFORMATION_SCHEMA\`.\`STATISTICS\` WHERE " +
+            dbTables.map(({ TABLE_SCHEMA, TABLE_NAME }) =>
+                `(\`TABLE_SCHEMA\` = '${TABLE_SCHEMA}' AND \`TABLE_NAME\` = '${TABLE_NAME}')`
+            )
+            .join(" OR ");
 
         // Avoid data directory scan: TABLE_SCHEMA
         // Avoid database directory scan: TABLE_NAME
         // All columns will hit the full table.
-        const kcuSubquerySql =  dbTables.map(({ TABLE_SCHEMA, TABLE_NAME }) => {
-            return `
-                SELECT
-                    *
-                FROM \`INFORMATION_SCHEMA\`.\`KEY_COLUMN_USAGE\` \`kcu\`
-                WHERE
-                    \`kcu\`.\`TABLE_SCHEMA\` = '${TABLE_SCHEMA}'
-                    AND
-                    \`kcu\`.\`TABLE_NAME\` = '${TABLE_NAME}'
-            `;
-        }).join(" UNION ");
+        const kcuSubquerySql = "SELECT * FROM \`INFORMATION_SCHEMA\`.\`KEY_COLUMN_USAGE\` \`kcu\` WHERE " +
+            dbTables
+                .map(({ TABLE_SCHEMA, TABLE_NAME }) =>
+                    `(\`kcu\`.\`TABLE_SCHEMA\` = '${TABLE_SCHEMA}' AND \`kcu\`.\`TABLE_NAME\` = '${TABLE_NAME}')`
+                )
+                .join(" OR ");
 
         // Avoid data directory scan: CONSTRAINT_SCHEMA
         // Avoid database directory scan: TABLE_NAME
         // All columns will hit the full table.
-        const rcSubquerySql = dbTables.map(({ TABLE_SCHEMA, TABLE_NAME }) => {
-            return `
-                SELECT
-                    *
-                FROM \`INFORMATION_SCHEMA\`.\`REFERENTIAL_CONSTRAINTS\`
-                WHERE
-                    \`CONSTRAINT_SCHEMA\` = '${TABLE_SCHEMA}'
-                    AND
-                    \`TABLE_NAME\` = '${TABLE_NAME}'
-            `;
-        }).join(" UNION ");
+        const rcSubquerySql = "SELECT * FROM \`INFORMATION_SCHEMA\`.\`REFERENTIAL_CONSTRAINTS\` WHERE " +
+            dbTables.map(({ TABLE_SCHEMA, TABLE_NAME }) =>
+                `(\`CONSTRAINT_SCHEMA\` = '${TABLE_SCHEMA}' AND \`TABLE_NAME\` = '${TABLE_NAME}')`
+            )
+            .join(" OR ");
 
         // Avoid data directory scan: TABLE_SCHEMA
         // Avoid database directory scan: TABLE_NAME
         // OPEN_FRM_ONLY applies to all columns
-        const columnsSql = dbTables.map(({ TABLE_SCHEMA, TABLE_NAME }) => {
-            return `
-                SELECT
-                    *
-                FROM
-                    \`INFORMATION_SCHEMA\`.\`COLUMNS\`
-                WHERE
-                    \`TABLE_SCHEMA\` = '${TABLE_SCHEMA}'
-                    AND
-                    \`TABLE_NAME\` = '${TABLE_NAME}'
-                `;
-        }).join(" UNION ");
+        const columnsSql = "SELECT * FROM \`INFORMATION_SCHEMA\`.\`COLUMNS\` WHERE " +
+            dbTables.map(({ TABLE_SCHEMA, TABLE_NAME }) =>
+                `(\`TABLE_SCHEMA\` = '${TABLE_SCHEMA}' AND \`TABLE_NAME\` = '${TABLE_NAME}')`
+            )
+            .join(" OR ");
 
         // No Optimizations are available for COLLATIONS
         const collationsSql = `
@@ -1455,8 +1426,8 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
                         return dbIndex["TABLE_NAME"] === dbTable["TABLE_NAME"]
                             && dbIndex["TABLE_SCHEMA"] === dbTable["TABLE_SCHEMA"]
                             && dbIndex["COLUMN_NAME"] === dbColumn["COLUMN_NAME"]
-                            && parseInt(dbIndex["NON_UNIQUE"], 10) === 0
-                    })
+                            && parseInt(dbIndex["NON_UNIQUE"], 10) === 0;
+                    });
 
                     const tableMetadata = this.connection.entityMetadatas.find(metadata => this.getTablePath(table) === this.getTablePath(metadata));
                     const hasIgnoredIndex = columnUniqueIndices.length > 0
@@ -1469,7 +1440,7 @@ export class MysqlQueryRunner extends BaseQueryRunner implements QueryRunner {
 
                     const isConstraintComposite = columnUniqueIndices.every((uniqueIndex) => {
                         return dbIndices.some(dbIndex => dbIndex["INDEX_NAME"] === uniqueIndex["INDEX_NAME"] && dbIndex["COLUMN_NAME"] !== dbColumn["COLUMN_NAME"]);
-                    })
+                    });
 
                     const tableColumn = new TableColumn();
                     tableColumn.name = dbColumn["COLUMN_NAME"];
